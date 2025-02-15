@@ -1,9 +1,20 @@
 package asg1
 
+import (
+	"math"
+)
+
 // Task 1
 // This function should output 0^2 + 1^2 + 2^2 + ... + (|n|)^2
 func getSumSquares(n int) int {
 	// To Do
+	var sum int
+
+	for i:=0; i <= int(math.Abs(float64(n))); i++ {
+		sum += int(math.Pow(float64(i), 2))
+	}
+
+	return sum
 }
 
 // Task 2
