@@ -2,6 +2,7 @@ package asg1
 
 import (
 	"math"
+	"strings"
 )
 
 // Task 1
@@ -24,6 +25,19 @@ func getSumSquares(n int) int {
 // - Read about the difference between the types "rune" and "byte", and see how we test the function.
 func getWords(text string, endLetter rune) []string {
 	// To Do
+	// Split into an array of words
+	splitWords := strings.Fields(text)
+	var result []string
+
+	// Loop over every word checking if the last letter equals the endLetter
+	for _, word := range splitWords {
+		wordRunes := []rune(word)
+		if wordRunes[len(wordRunes)-1] == endLetter {
+			result = append(result, word)
+		}
+	}
+
+	return result
 }
 
 type RegRecord struct {
