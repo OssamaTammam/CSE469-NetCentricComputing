@@ -3,6 +3,7 @@ package asg1
 import (
 	"math"
 	"strings"
+	"sync"
 )
 
 // Task 1
@@ -81,8 +82,58 @@ func getCourseInfo(records []RegRecord) map[string]int {
 // However, the purpose here is to make you more familiar with channels and thread communication, not the performance itself.
 
 func count(list []int, key int, numThreads int) int {
-
 	// To Do
+	inChannels := make([]chan int, numThreads)
+	outChannel := make(chan int, numThreads)
+	var waitGroup sync.WaitGroup
+
+	// Fire up the thread workers to count the occurrences
+	for i := 0; i < numThreads; i++ {
+		inChannels[i] = make(chan int)
+		waitGroup.Add(1)
+		go func(inChannel chan int) {
+			countWorker(key, inChannel, outChannel)
+			waitGroup.Done()
+		}(inChannels[i])
+	}
+
+	// Feed the input channel
+	noElementsPerChan := len(list) / numThreads
+	lastEnd := 0
+	for i := 0; i < numThreads; i++ {
+		start := lastEnd
+		end := start + noElementsPerChan
+
+		// Out of bounds check
+		if i == numThreads-1 {
+			end = len(list)
+		}
+
+		listSlice := list[start:end]
+		lastEnd = end
+
+		// Fire go routines to feed the channels
+		go func(inChannel chan int, values []int) {
+			for _, number := range values {
+				inChannel <- number
+			}
+			close(inChannel)
+		}(inChannels[i], listSlice)
+	}
+
+	// Wait until in threads are done then close out channel
+	go func() {
+		waitGroup.Wait()
+		close(outChannel)
+	}()
+
+	// Read from out channel till it closes
+	var result int
+	for freq := range outChannel {
+		result += freq
+	}
+
+	return result
 }
 
 // This worker function receives inputs via inputChan, and outputs the number of occurrences to outChan
@@ -90,4 +141,15 @@ func count(list []int, key int, numThreads int) int {
 // the function should keep working as long as inputChan is open.
 func countWorker(key int, inputChan chan int, outChan chan int) {
 	// To Do
+	var freq int
+
+	// As long as channel's buffer has elements keep reading
+	for number := range inputChan {
+		if number == key {
+			freq += 1
+		}
+	}
+
+	// Write to out channel once main threads closes channel
+	outChan <- freq
 }
