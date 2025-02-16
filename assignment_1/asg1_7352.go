@@ -1,7 +1,6 @@
 package asg1
 
 import (
-	"math"
 	"strings"
 	"sync"
 )
@@ -11,9 +10,11 @@ import (
 func getSumSquares(n int) int {
 	// To Do
 	var sum int
-
-	for i := 0; i <= int(math.Abs(float64(n))); i++ {
-		sum += int(math.Pow(float64(i), 2))
+	if n < 0 {
+		n = -n
+	}
+	for i := 0; i <= n; i++ {
+		sum += i * i
 	}
 
 	return sum
@@ -32,6 +33,7 @@ func getWords(text string, endLetter rune) []string {
 
 	// Loop over every word checking if the last letter equals the endLetter
 	for _, word := range splitWords {
+		// Accessing directly loses data so make list of runes
 		wordRunes := []rune(word)
 		if wordRunes[len(wordRunes)-1] == endLetter {
 			result = append(result, word)
