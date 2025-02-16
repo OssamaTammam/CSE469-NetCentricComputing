@@ -50,8 +50,24 @@ type RegRecord struct {
 // a map that shows the number of students registered per course.
 // Note that duplicates in records may appear in the input list, and they should not be included in the count.
 func getCourseInfo(records []RegRecord) map[string]int {
-
 	// To Do
+	// Hashmap to hold results
+	coursesFreq := make(map[string]int)
+	studentSet := make(map[int]struct{})
+
+	// Iterate over records if it exists skip unless +1 no of student per that course
+	for _, record := range records {
+		_, exists := studentSet[record.studentId]
+		if exists {
+			continue
+		}
+
+		// Add student to the set
+		studentSet[record.studentId] = struct{}{}
+		coursesFreq[record.courseName] += 1
+	}
+
+	return coursesFreq
 }
 
 // Task 4
