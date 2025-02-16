@@ -11,7 +11,7 @@ func getSumSquares(n int) int {
 	// To Do
 	var sum int
 
-	for i:=0; i <= int(math.Abs(float64(n))); i++ {
+	for i := 0; i <= int(math.Abs(float64(n))); i++ {
 		sum += int(math.Pow(float64(i), 2))
 	}
 
