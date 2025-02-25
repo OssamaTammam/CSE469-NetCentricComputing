@@ -4,15 +4,45 @@ import (
 	"fmt"
 	"mapreduce"
 	"os"
+	"strconv"
+	"strings"
 )
 
 func mapFn(docName string, value string) []mapreduce.KeyValue {
 	// TODO: write this function -- See the description in the assignment
+	// Tokenize the text
+	tokens := strings.Fields(value)
 
+	// Store in a frequency map
+	freqMap := make(map[string]int)
+	for _, token := range tokens {
+		if len(token) >= 8 {
+			freqMap[token] += 1
+		}
+	}
+
+	// Loop over the frequency map and convert to type KeyValue
+	outputPairs := []mapreduce.KeyValue{}
+	for token, freq := range freqMap {
+		outputPairs = append(outputPairs, mapreduce.KeyValue{token, strconv.Itoa(freq)})
+	}
+
+	return outputPairs
 }
 
 func reduceFn(key string, values []string) string {
 	// TODO: write this function -- See the description in the assignment
+	// Loop over values and combine them
+	var totalFreq int
+	for _, value := range values {
+		freq, err := strconv.Atoi(value)
+		if err != nil {
+			panic("Error converting to int: " + err.Error())
+		}
+		totalFreq += freq
+	}
+
+	return strconv.Itoa(totalFreq)
 }
 
 // Can be run in 3 ways:
