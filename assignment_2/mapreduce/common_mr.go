@@ -8,7 +8,7 @@ import (
 	"strconv"
 )
 
-const debugEnabled = false
+const debugEnabled = true
 const outTestPath = "tmp_testout552"
 
 // The function will only print if the debugEnabled const has been set to true
