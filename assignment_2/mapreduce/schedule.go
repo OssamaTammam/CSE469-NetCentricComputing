@@ -1,12 +1,15 @@
 package mapreduce
 
 func runTask(workerArgs RunTaskArgs, workerChan chan string, taskCompleteChan chan bool) {
-	workerAddress := <-workerChan
-	taskSuccess := call(workerAddress, "Worker.RunTask", &workerArgs, &struct{}{})
-	if taskSuccess {
-		taskCompleteChan <- true
+	var taskSuccess bool
+	for !taskSuccess {
+		workerAddress := <-workerChan
+		taskSuccess = call(workerAddress, "Worker.RunTask", &workerArgs, &struct{}{})
+		if taskSuccess {
+			taskCompleteChan <- true
+			workerChan <- workerAddress // Reuse workers only if they don't fail if they fail don't put them in the channel (I tried reusing them but i think node failure here refers to hardware failure without the node being restarted so i took it out entirely)
+		}
 	}
-	workerChan <- workerAddress // Reuse workers
 }
 
 func monitorFileCompletion(nTasks int, taskCompleteChan chan bool, tasksDoneChan chan bool) {
@@ -54,5 +57,5 @@ func (mr *Master) schedule(phase jobPhase) {
 		go runTask(workerArgs, mr.registerChannel, taskCompleteChan)
 	}
 
-	<-tasksDoneChan
+	<-tasksDoneChan // Block until all tasks complete
 }
