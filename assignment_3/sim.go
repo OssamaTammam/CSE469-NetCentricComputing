@@ -14,7 +14,7 @@ type ChandyLamportSim struct {
 	nodes          map[string]*Node // key = node ID
 	logger         *Logger
 	// TODO: You can add more fields here.
-
+	snapshots map[int][]string // key = snapshot ID, value = list of node IDs
 }
 
 func NewSimulator() *ChandyLamportSim {
@@ -24,6 +24,7 @@ func NewSimulator() *ChandyLamportSim {
 		nodes:          make(map[string]*Node),
 		logger:         NewLogger(),
 		// ToDo: you may need to modify this if you modify the above struct
+		snapshots: make(map[int][]string),
 	}
 }
 
@@ -107,8 +108,8 @@ func (sim *ChandyLamportSim) StartSnapshot(nodeId string) {
 func (sim *ChandyLamportSim) NotifyCompletedSnapshot(nodeId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.nodes[nodeId], EndSnapshotRecord{nodeId, snapshotId})
 	// TODO: Complete this method
-	
-
+	log.Printf("Node %v completed snapshot %v", nodeId, snapshotId)
+	sim.snapshots[snapshotId] = append(sim.snapshots[snapshotId], nodeId)
 }
 
 // This should be thread safe
@@ -118,6 +119,7 @@ func (sim *ChandyLamportSim) CollectSnapshot(snapshotId int) *GlobalSnapshot {
 	snap := GlobalSnapshot{snapshotId, make(map[string]int), make([]*MsgSnapshot, 0)}
 
 	// Block until snapshots of all nodes for this global snapshot
+	for len(sim.snapshots)
 
 	return &snap
 }

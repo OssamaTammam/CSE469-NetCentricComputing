@@ -8,20 +8,21 @@ import (
 // This struct keeps track of an incoming link status
 // It contains the the number of tokens and has the node received a marker message on this incoming channel to close it
 type LinkState struct {
-	tokens int  // The number of tokens on the link
-	marked bool // true if the marker has been received on this link
+	messages []MsgSnapshot // The number of tokens on the link
+	marked   bool          // true if the marker has been received on this link
+	lock     sync.Mutex
 }
 
 // This struct represents a snapshot of a node.
 // It contains the state of the node at the time of the snapshot.
 // It also contains the state of the node's links states (To be updated till the snapshot is completed).
 type NodeSnapshot struct {
-	id           int                   // The id of the global snapshot
-	localState   int                   // Tokens at the time of the snapshot start
-	linksState   map[string]*LinkState // key = link.src, value = link state
-	markedLinks  int                   // Keep track of how many links are marked in a snapshot
-	isCompleted  bool                  // true if the snapshot is completed
-	snapshotLock sync.RWMutex
+	id          int                   // The id of the global snapshot
+	localState  int                   // Tokens at the time of the snapshot start
+	linksState  map[string]*LinkState // key = link.src, value = link state
+	markedLinks int                   // Keep track of how many links are marked in a snapshot
+	isCompleted bool                  // true if the snapshot is completed
+	lock        sync.RWMutex
 }
 
 // The main participant of the distributed snapshot protocol.
@@ -113,36 +114,46 @@ func (node *Node) SendTokens(numTokens int, dest string) {
 }
 
 // Responsible for adding tokens on incoming channels for all active snapshots
-func (node *Node) RecordTokens(src string, tokens int) {
+func (node *Node) RecordTokens(src string, message Message) {
 	node.tokensLock.Lock()
-	node.tokens += tokens
+	node.tokens += message.data
 	node.tokensLock.Unlock()
 
 	node.snapshotsLock.RLock()
-	defer node.snapshotsLock.RUnlock()
-
+	snapshots := make([]*NodeSnapshot, 0, len(node.snapshots))
 	for _, snapshot := range node.snapshots {
-		snapshot.snapshotLock.Lock()
+		snapshots = append(snapshots, snapshot)
+	}
+	node.snapshotsLock.RUnlock()
+
+	for _, snapshot := range snapshots {
+		snapshot.lock.Lock()
 		if snapshot.isCompleted {
-			snapshot.snapshotLock.Unlock()
+			snapshot.lock.Unlock()
 			continue
 		}
 
 		// Add the tokens on the incoming channel and on the node
 		linkState := snapshot.linksState[src]
-		linkState.tokens += tokens
+		linkState.lock.Lock()
+		messageSnapshot := MsgSnapshot{
+			src:     src,
+			dest:    node.id,
+			message: message,
+		}
+		linkState.messages = append(linkState.messages, messageSnapshot)
+		linkState.lock.Unlock()
+		snapshot.lock.Unlock()
 
-		snapshot.snapshotLock.Unlock()
-		log.Printf("Node: %v, added %v tokens to incoming channel from %v\n",
-			node.id, tokens, src)
+		log.Printf("Node: %v, added token message to link %v\n", node.id, src)
 	}
 }
 
 // Mark snapshot as completed
 func (node *Node) CompleteSnapshot(snapshot *NodeSnapshot) {
-	snapshot.snapshotLock.Lock()
+	snapshot.lock.Lock()
 	snapshot.isCompleted = true
-	snapshot.snapshotLock.Unlock()
+	snapshot.lock.Unlock()
 
 	go node.sim.NotifyCompletedSnapshot(node.id, snapshot.id)
 	log.Printf("Node: %v, marked snapshot %v as completed", node.id, snapshot.id)
@@ -161,11 +172,11 @@ func (node *Node) HandlePacket(src string, message Message) {
 		// If snapshot exists, we update the link state
 		// If snapshot does not exist, we start a new snapshot
 		if exists {
-			snapshot.snapshotLock.Lock()
+			snapshot.lock.Lock()
 			linkState := snapshot.linksState[src]
 			linkState.marked = true
 			snapshot.markedLinks += 1
-			snapshot.snapshotLock.Unlock()
+			snapshot.lock.Unlock()
 
 			log.Printf("Node: %v, received marker message from %v, link state updated\n", node.id, src)
 
@@ -178,7 +189,7 @@ func (node *Node) HandlePacket(src string, message Message) {
 		}
 	} else {
 		log.Printf("Node: %v, received token message from %v\n", node.id, src)
-		node.RecordTokens(src, message.data)
+		node.RecordTokens(src, message)
 	}
 }
 
