@@ -98,20 +98,26 @@ func (sim *ChandyLamportSim) StartSnapshot(nodeId string) {
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.nodes[nodeId], StartSnapshotRecord{nodeId, snapshotId})
 	// TODO: Complete this method
-
+	log.Printf("Starting global snapshot %v at node %v", snapshotId, nodeId)
+	startingNode := sim.nodes[nodeId]
+	go startingNode.StartSnapshot(snapshotId)
 }
 
+// A node sends a signal that it's done with its snapshot for snapshotId
 func (sim *ChandyLamportSim) NotifyCompletedSnapshot(nodeId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.nodes[nodeId], EndSnapshotRecord{nodeId, snapshotId})
-
 	// TODO: Complete this method
+	
 
 }
 
+// This should be thread safe
 func (sim *ChandyLamportSim) CollectSnapshot(snapshotId int) *GlobalSnapshot {
 
 	// TODO: Complete this method
 	snap := GlobalSnapshot{snapshotId, make(map[string]int), make([]*MsgSnapshot, 0)}
+
+	// Block until snapshots of all nodes for this global snapshot
 
 	return &snap
 }
