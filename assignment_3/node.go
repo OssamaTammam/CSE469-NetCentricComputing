@@ -2,15 +2,13 @@ package asg3
 
 import (
 	"log"
-	"sync"
 )
 
 // This struct keeps track of an incoming link status
 // It contains the the number of tokens and has the node received a marker message on this incoming channel to close it
 type LinkState struct {
-	messages []MsgSnapshot // The number of tokens on the link
-	marked   bool          // true if the marker has been received on this link
-	lock     sync.Mutex
+	messages []*MsgSnapshot // The number of tokens on the link
+	marked   bool           // true if the marker has been received on this link
 }
 
 // This struct represents a snapshot of a node.
@@ -22,7 +20,6 @@ type NodeSnapshot struct {
 	linksState  map[string]*LinkState // key = link.src, value = link state
 	markedLinks int                   // Keep track of how many links are marked in a snapshot
 	isCompleted bool                  // true if the snapshot is completed
-	lock        sync.RWMutex
 }
 
 // The main participant of the distributed snapshot protocol.
@@ -39,9 +36,7 @@ type Node struct {
 	inboundLinks  map[string]*Link // key = link.src
 
 	// TODO: add more fields here (what does each node need to keep track of?)
-	snapshots     map[int]*NodeSnapshot // key = snapshotId
-	tokensLock    sync.RWMutex
-	snapshotsLock sync.RWMutex
+	snapshots map[int]*NodeSnapshot // key = snapshotId
 }
 
 // A unidirectional communication channel between two nodes
@@ -60,9 +55,7 @@ func CreateNode(id string, tokens int, sim *ChandyLamportSim) *Node {
 		outboundLinks: make(map[string]*Link),
 		inboundLinks:  make(map[string]*Link),
 		// TODO: You may need to modify this if you make modifications above
-		snapshots:     make(map[int]*NodeSnapshot),
-		tokensLock:    sync.RWMutex{},
-		snapshotsLock: sync.RWMutex{},
+		snapshots: make(map[int]*NodeSnapshot),
 	}
 }
 
@@ -115,48 +108,26 @@ func (node *Node) SendTokens(numTokens int, dest string) {
 
 // Responsible for adding tokens on incoming channels for all active snapshots
 func (node *Node) RecordTokens(src string, message Message) {
-	node.tokensLock.Lock()
 	node.tokens += message.data
-	node.tokensLock.Unlock()
 
-	node.snapshotsLock.RLock()
-	snapshots := make([]*NodeSnapshot, 0, len(node.snapshots))
 	for _, snapshot := range node.snapshots {
-		snapshots = append(snapshots, snapshot)
-	}
-	node.snapshotsLock.RUnlock()
-
-	for _, snapshot := range snapshots {
-		snapshot.lock.Lock()
 		if snapshot.isCompleted {
-			snapshot.lock.Unlock()
 			continue
 		}
 
 		// Add the tokens on the incoming channel and on the node
 		linkState := snapshot.linksState[src]
-		linkState.lock.Lock()
+		if linkState.marked {
+			continue
+		}
+
 		messageSnapshot := MsgSnapshot{
 			src:     src,
 			dest:    node.id,
 			message: message,
 		}
-		linkState.messages = append(linkState.messages, messageSnapshot)
-		linkState.lock.Unlock()
-		snapshot.lock.Unlock()
-
-		log.Printf("Node: %v, added token message to link %v\n", node.id, src)
+		linkState.messages = append(linkState.messages, &messageSnapshot)
 	}
-}
-
-// Mark snapshot as completed
-func (node *Node) CompleteSnapshot(snapshot *NodeSnapshot) {
-	snapshot.lock.Lock()
-	snapshot.isCompleted = true
-	snapshot.lock.Unlock()
-
-	go node.sim.NotifyCompletedSnapshot(node.id, snapshot.id)
-	log.Printf("Node: %v, marked snapshot %v as completed", node.id, snapshot.id)
 }
 
 func (node *Node) HandlePacket(src string, message Message) {
@@ -165,27 +136,25 @@ func (node *Node) HandlePacket(src string, message Message) {
 		log.Printf("Node: %v, received marker message from %v\n", node.id, src)
 
 		snapshotId := message.data
-		node.snapshotsLock.RLock()
 		snapshot, exists := node.snapshots[snapshotId]
-		node.snapshotsLock.RUnlock()
 
-		// If snapshot exists, we update the link state
-		// If snapshot does not exist, we start a new snapshot
-		if exists {
-			snapshot.lock.Lock()
-			linkState := snapshot.linksState[src]
-			linkState.marked = true
-			snapshot.markedLinks += 1
-			snapshot.lock.Unlock()
+		if !exists {
+			// If the snapshot does not exist, we start a new snapshot
+			node.StartSnapshot(snapshotId)
+			snapshot = node.snapshots[snapshotId]
+		}
 
-			log.Printf("Node: %v, received marker message from %v, link state updated\n", node.id, src)
+		linkState := snapshot.linksState[src]
+		if linkState.marked {
+			return
+		}
+		linkState.marked = true
+		snapshot.markedLinks += 1
 
-			// Check if snapshot is completed
-			if snapshot.markedLinks == len(node.inboundLinks) {
-				node.CompleteSnapshot(snapshot)
-			}
-		} else {
-			go node.StartSnapshot(snapshotId)
+		// Complete snapshot
+		if snapshot.markedLinks == len(node.inboundLinks) {
+			snapshot.isCompleted = true
+			node.sim.NotifyCompletedSnapshot(node.id, snapshot.id)
 		}
 	} else {
 		log.Printf("Node: %v, received token message from %v\n", node.id, src)
@@ -198,24 +167,25 @@ func (node *Node) StartSnapshot(snapshotId int) {
 	// Start snapshot
 	log.Printf("Node: %v, starting snapshot %v\n", node.id, snapshotId)
 
-	// Read tokens safely
-	node.tokensLock.RLock()
+	// Read tokens
 	tokens := node.tokens
-	node.tokensLock.RUnlock()
 
 	// Create a new snapshot
 	snapshot := NodeSnapshot{
-		id:         snapshotId,
-		localState: tokens,
-		linksState: make(map[string]*LinkState),
+		id:          snapshotId,
+		localState:  tokens,
+		linksState:  make(map[string]*LinkState),
+		markedLinks: 0,
+		isCompleted: false,
 	}
 
-	node.snapshotsLock.Lock()
 	for src := range node.inboundLinks {
-		snapshot.linksState[src] = &LinkState{}
+		snapshot.linksState[src] = &LinkState{
+			messages: make([]*MsgSnapshot, 0),
+			marked:   false,
+		}
 	}
 	node.snapshots[snapshotId] = &snapshot
-	node.snapshotsLock.Unlock()
 
 	// Send marker to  all outbound links
 	message := Message{isMarker: true, data: snapshotId}

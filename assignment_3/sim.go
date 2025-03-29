@@ -3,6 +3,7 @@ package asg3
 import (
 	"log"
 	"math/rand"
+	"sync"
 )
 
 // Max random delay added to packet delivery
@@ -14,7 +15,10 @@ type ChandyLamportSim struct {
 	nodes          map[string]*Node // key = node ID
 	logger         *Logger
 	// TODO: You can add more fields here.
-	snapshots map[int][]string // key = snapshot ID, value = list of node IDs
+	completedNodes   map[int]int // key = snapshotIds
+	snapshotChannels map[int]chan bool
+
+	mu sync.Mutex
 }
 
 func NewSimulator() *ChandyLamportSim {
@@ -24,7 +28,8 @@ func NewSimulator() *ChandyLamportSim {
 		nodes:          make(map[string]*Node),
 		logger:         NewLogger(),
 		// ToDo: you may need to modify this if you modify the above struct
-		snapshots: make(map[int][]string),
+		completedNodes:   make(map[int]int),
+		snapshotChannels: make(map[int]chan bool),
 	}
 }
 
@@ -101,7 +106,10 @@ func (sim *ChandyLamportSim) StartSnapshot(nodeId string) {
 	// TODO: Complete this method
 	log.Printf("Starting global snapshot %v at node %v", snapshotId, nodeId)
 	startingNode := sim.nodes[nodeId]
-	go startingNode.StartSnapshot(snapshotId)
+	sim.mu.Lock()
+	sim.snapshotChannels[snapshotId] = make(chan bool)
+	sim.mu.Unlock()
+	startingNode.StartSnapshot(snapshotId)
 }
 
 // A node sends a signal that it's done with its snapshot for snapshotId
@@ -109,7 +117,12 @@ func (sim *ChandyLamportSim) NotifyCompletedSnapshot(nodeId string, snapshotId i
 	sim.logger.RecordEvent(sim.nodes[nodeId], EndSnapshotRecord{nodeId, snapshotId})
 	// TODO: Complete this method
 	log.Printf("Node %v completed snapshot %v", nodeId, snapshotId)
-	sim.snapshots[snapshotId] = append(sim.snapshots[snapshotId], nodeId)
+	sim.mu.Lock()
+	defer sim.mu.Unlock()
+	sim.completedNodes[snapshotId]++
+	if sim.completedNodes[snapshotId] == len(sim.nodes) {
+		sim.snapshotChannels[snapshotId] <- true
+	}
 }
 
 // This should be thread safe
@@ -118,8 +131,18 @@ func (sim *ChandyLamportSim) CollectSnapshot(snapshotId int) *GlobalSnapshot {
 	// TODO: Complete this method
 	snap := GlobalSnapshot{snapshotId, make(map[string]int), make([]*MsgSnapshot, 0)}
 
-	// Block until snapshots of all nodes for this global snapshot
-	for len(sim.snapshots)
+	// Block until signal receive
+	<-sim.snapshotChannels[snapshotId]
+
+	// Collect the tokens from each node
+	for id, node := range sim.nodes {
+		snapshot := node.snapshots[snapshotId]
+		snap.tokenMap[id] = snapshot.localState
+		for _, linkState := range snapshot.linksState {
+			snap.messages = append(snap.messages, linkState.messages...)
+		}
+		log.Printf("Collecting tokens from node %v for snapshot %v", id, snapshotId)
+	}
 
 	return &snap
 }
