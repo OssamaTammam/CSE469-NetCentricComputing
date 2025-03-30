@@ -2,6 +2,7 @@ package asg3
 
 import (
 	"log"
+	"sync"
 )
 
 // This struct keeps track of an incoming link status
@@ -16,10 +17,12 @@ type LinkState struct {
 // It also contains the state of the node's links states (To be updated till the snapshot is completed).
 type NodeSnapshot struct {
 	id          int                   // The id of the global snapshot
+	nodeId      string                // The id of the node
 	localState  int                   // Tokens at the time of the snapshot start
 	linksState  map[string]*LinkState // key = link.src, value = link state
 	markedLinks int                   // Keep track of how many links are marked in a snapshot
 	isCompleted bool                  // true if the snapshot is completed
+	mu          sync.Mutex            // Mutex to protect the snapshot state
 }
 
 // The main participant of the distributed snapshot protocol.
@@ -34,7 +37,6 @@ type Node struct {
 	tokens        int
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
-
 	// TODO: add more fields here (what does each node need to keep track of?)
 	snapshots map[int]*NodeSnapshot // key = snapshotId
 }
@@ -108,25 +110,25 @@ func (node *Node) SendTokens(numTokens int, dest string) {
 
 // Responsible for adding tokens on incoming channels for all active snapshots
 func (node *Node) RecordTokens(src string, message Message) {
+	// Update tokens first
 	node.tokens += message.data
 
+	// Only record messages for active snapshots
 	for _, snapshot := range node.snapshots {
+		// Skip if snapshot is completed
 		if snapshot.isCompleted {
 			continue
 		}
 
-		// Add the tokens on the incoming channel and on the node
-		linkState := snapshot.linksState[src]
-		if linkState.marked {
-			continue
+		linkState, exists := snapshot.linksState[src]
+		if exists && !linkState.marked {
+			messageSnapshot := MsgSnapshot{
+				src:     src,
+				dest:    node.id,
+				message: message,
+			}
+			linkState.messages = append(linkState.messages, &messageSnapshot)
 		}
-
-		messageSnapshot := MsgSnapshot{
-			src:     src,
-			dest:    node.id,
-			message: message,
-		}
-		linkState.messages = append(linkState.messages, &messageSnapshot)
 	}
 }
 
@@ -145,6 +147,7 @@ func (node *Node) HandlePacket(src string, message Message) {
 		}
 
 		linkState := snapshot.linksState[src]
+
 		if linkState.marked {
 			return
 		}
@@ -173,6 +176,7 @@ func (node *Node) StartSnapshot(snapshotId int) {
 	// Create a new snapshot
 	snapshot := NodeSnapshot{
 		id:          snapshotId,
+		nodeId:      node.id,
 		localState:  tokens,
 		linksState:  make(map[string]*LinkState),
 		markedLinks: 0,
@@ -190,5 +194,6 @@ func (node *Node) StartSnapshot(snapshotId int) {
 	// Send marker to  all outbound links
 	message := Message{isMarker: true, data: snapshotId}
 	node.SendToNeighbors(message)
+
 	log.Printf("Node: %v, sent marker message to all outbound links\n", node.id)
 }

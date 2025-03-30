@@ -3,6 +3,7 @@ package asg3
 import (
 	"fmt"
 	"math/rand"
+	"os"
 	"testing"
 )
 
@@ -17,6 +18,12 @@ func runTest(t *testing.T, topFile string, eventsFile string, snapFiles []string
 	fmt.Println(startMessage)
 
 	// Initialize simulator
+	err := os.Setenv("GODEBUG", "randseednop=0")
+	if err != nil {
+		fmt.Println("Error setting environment variable:", err)
+		return
+	}
+
 	rand.Seed(seed + 1)
 	sim := NewSimulator()
 	readTopologyFile(topFile, sim)

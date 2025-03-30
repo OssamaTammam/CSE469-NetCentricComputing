@@ -15,10 +15,9 @@ type ChandyLamportSim struct {
 	nodes          map[string]*Node // key = node ID
 	logger         *Logger
 	// TODO: You can add more fields here.
-	completedNodes   map[int]int // key = snapshotIds
-	snapshotChannels map[int]chan bool
-
-	mu sync.Mutex
+	snapshots     map[int][]*NodeSnapshot // key = snapshotId, value = list of node snapshots
+	completeChans map[int]chan bool       // key = snapshotId, value = channel to notify completion
+	mu            sync.Mutex
 }
 
 func NewSimulator() *ChandyLamportSim {
@@ -28,8 +27,8 @@ func NewSimulator() *ChandyLamportSim {
 		nodes:          make(map[string]*Node),
 		logger:         NewLogger(),
 		// ToDo: you may need to modify this if you modify the above struct
-		completedNodes:   make(map[int]int),
-		snapshotChannels: make(map[int]chan bool),
+		snapshots:     make(map[int][]*NodeSnapshot),
+		completeChans: make(map[int]chan bool),
 	}
 }
 
@@ -105,11 +104,11 @@ func (sim *ChandyLamportSim) StartSnapshot(nodeId string) {
 	sim.logger.RecordEvent(sim.nodes[nodeId], StartSnapshotRecord{nodeId, snapshotId})
 	// TODO: Complete this method
 	log.Printf("Starting global snapshot %v at node %v", snapshotId, nodeId)
-	startingNode := sim.nodes[nodeId]
 	sim.mu.Lock()
-	sim.snapshotChannels[snapshotId] = make(chan bool)
+	sim.snapshots[snapshotId] = make([]*NodeSnapshot, 0)
+	sim.completeChans[snapshotId] = make(chan bool)
+	sim.nodes[nodeId].StartSnapshot(snapshotId)
 	sim.mu.Unlock()
-	startingNode.StartSnapshot(snapshotId)
 }
 
 // A node sends a signal that it's done with its snapshot for snapshotId
@@ -118,10 +117,11 @@ func (sim *ChandyLamportSim) NotifyCompletedSnapshot(nodeId string, snapshotId i
 	// TODO: Complete this method
 	log.Printf("Node %v completed snapshot %v", nodeId, snapshotId)
 	sim.mu.Lock()
-	defer sim.mu.Unlock()
-	sim.completedNodes[snapshotId]++
-	if sim.completedNodes[snapshotId] == len(sim.nodes) {
-		sim.snapshotChannels[snapshotId] <- true
+	node := sim.nodes[nodeId]
+	sim.snapshots[snapshotId] = append(sim.snapshots[snapshotId], node.snapshots[snapshotId])
+	sim.mu.Unlock()
+	if len(sim.snapshots[snapshotId]) == len(sim.nodes) {
+		sim.completeChans[snapshotId] <- true
 	}
 }
 
@@ -131,18 +131,23 @@ func (sim *ChandyLamportSim) CollectSnapshot(snapshotId int) *GlobalSnapshot {
 	// TODO: Complete this method
 	snap := GlobalSnapshot{snapshotId, make(map[string]int), make([]*MsgSnapshot, 0)}
 
-	// Block until signal receive
-	<-sim.snapshotChannels[snapshotId]
+	sim.mu.Lock()
+	completeChannel := sim.completeChans[snapshotId]
+	sim.mu.Unlock()
 
-	// Collect the tokens from each node
-	for id, node := range sim.nodes {
-		snapshot := node.snapshots[snapshotId]
-		snap.tokenMap[id] = snapshot.localState
+	<-completeChannel
+
+	sim.mu.Lock()
+	snapshotsCopy := append([]*NodeSnapshot{}, sim.snapshots[snapshotId]...)
+	sim.mu.Unlock()
+
+	for _, snapshot := range snapshotsCopy {
+		snapshot.mu.Lock()
+		snap.tokenMap[snapshot.nodeId] = snapshot.localState
 		for _, linkState := range snapshot.linksState {
 			snap.messages = append(snap.messages, linkState.messages...)
 		}
-		log.Printf("Collecting tokens from node %v for snapshot %v", id, snapshotId)
+		snapshot.mu.Unlock()
 	}
-
 	return &snap
 }
