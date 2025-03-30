@@ -142,12 +142,10 @@ func (sim *ChandyLamportSim) CollectSnapshot(snapshotId int) *GlobalSnapshot {
 	sim.mu.Unlock()
 
 	for _, snapshot := range snapshotsCopy {
-		snapshot.mu.Lock()
 		snap.tokenMap[snapshot.nodeId] = snapshot.localState
 		for _, linkState := range snapshot.linksState {
 			snap.messages = append(snap.messages, linkState.messages...)
 		}
-		snapshot.mu.Unlock()
 	}
 	return &snap
 }

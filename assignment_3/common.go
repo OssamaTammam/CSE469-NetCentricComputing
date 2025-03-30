@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const debug = false
+const debug = true
 
 // The output of the Chandy Lamport algorithm
 type GlobalSnapshot struct {

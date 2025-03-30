@@ -2,7 +2,6 @@ package asg3
 
 import (
 	"log"
-	"sync"
 )
 
 // This struct keeps track of an incoming link status
@@ -22,7 +21,6 @@ type NodeSnapshot struct {
 	linksState  map[string]*LinkState // key = link.src, value = link state
 	markedLinks int                   // Keep track of how many links are marked in a snapshot
 	isCompleted bool                  // true if the snapshot is completed
-	mu          sync.Mutex            // Mutex to protect the snapshot state
 }
 
 // The main participant of the distributed snapshot protocol.
@@ -140,17 +138,14 @@ func (node *Node) HandlePacket(src string, message Message) {
 		snapshotId := message.data
 		snapshot, exists := node.snapshots[snapshotId]
 
+		// If the snapshot does not exist, we start a new snapshot
 		if !exists {
-			// If the snapshot does not exist, we start a new snapshot
 			node.StartSnapshot(snapshotId)
 			snapshot = node.snapshots[snapshotId]
 		}
 
+		// Mark link state
 		linkState := snapshot.linksState[src]
-
-		if linkState.marked {
-			return
-		}
 		linkState.marked = true
 		snapshot.markedLinks += 1
 
@@ -183,6 +178,7 @@ func (node *Node) StartSnapshot(snapshotId int) {
 		isCompleted: false,
 	}
 
+	// Add empty link states for all inbound links
 	for src := range node.inboundLinks {
 		snapshot.linksState[src] = &LinkState{
 			messages: make([]*MsgSnapshot, 0),
