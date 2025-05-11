@@ -10,7 +10,7 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongServer = "ErrWrongServer"
-	MAX_RETRIES    = 1
+	MAX_RETRIES    = 2
 )
 
 type Err string

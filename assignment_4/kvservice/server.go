@@ -15,7 +15,7 @@ import (
 )
 
 // Debugging
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -47,17 +47,15 @@ func (kvStore *KVStore) Put(key string, value string) {
 // Put hash returns the prevValue
 func (kvStore *KVStore) PutHash(key string, value string) string {
 	// Get prev value
-	kvStore.mu.RLock()
-	prevValue, exists := kvStore.store[key]
-	kvStore.mu.RUnlock()
+	kvStore.mu.Lock()
+	defer kvStore.mu.Unlock()
 
+	prevValue, exists := kvStore.store[key]
 	if !exists {
 		prevValue = ""
 	}
 
-	kvStore.mu.Lock()
 	kvStore.store[key] = strconv.Itoa(int(hash(prevValue + value)))
-	kvStore.mu.Unlock()
 
 	return prevValue
 }
