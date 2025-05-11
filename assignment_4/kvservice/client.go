@@ -93,7 +93,7 @@ func (client *KVClient) Get(key string) string {
 			break
 		}
 
-		DPrintf("Client %v: Request Get[%v] failed retrying in %v", client.id, args.Key, sysmonitor.PingInterval)
+		DPrintf("Client %v: Request Get[%v] failed retrying in %v\n", client.id, args.Key, sysmonitor.PingInterval)
 		time.Sleep(sysmonitor.PingInterval)
 	}
 
@@ -124,7 +124,7 @@ func (client *KVClient) PutAux(key string, value string, dohash bool) string {
 			break
 		}
 
-		DPrintf("Client %v: Request Put[%v]=%v failed retrying in %v", client.id, args.Key, args.Value, sysmonitor.PingInterval)
+		DPrintf("Client %v: Request Put[%v]=%v failed retrying in %v\n", client.id, args.Key, args.Value, sysmonitor.PingInterval)
 		time.Sleep(sysmonitor.PingInterval)
 	}
 

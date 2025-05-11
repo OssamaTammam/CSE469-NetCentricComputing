@@ -144,6 +144,15 @@ type KVServer struct {
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 	DPrintf("Server %v: Put[%v]=%v start\n", server.id, args.Key, args.Value)
 
+	// If not primary refuse
+	server.viewMu.RLock()
+	if !server.isPrimary && !args.IsBackup {
+		DPrintf("Server %v: Reject request, backup doesn't serve clients\n", server.id)
+		reply.Err = ErrWrongServer
+		return nil
+	}
+	server.viewMu.RUnlock()
+
 	// Check for dupes
 	if cachedReply, exists := server.reqCache.GetRequest(args.ClientId, args.RequestId); exists {
 		DPrintf("Server %v: Duplicate request Put[%v]=%v serve from cache\n", server.id, args.Key, args.Value)
@@ -159,7 +168,7 @@ func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 		backupReply := PutReply{}
 		for range MAX_RETRIES {
 			DPrintf("Server %v: Forwarding Put[%v]=%v to backup server %v", server.id, args.Key, args.Value, server.backup)
-			success := call(server.backup, "KVStore.Put", &backupArgs, &backupReply)
+			success := call(server.backup, "KVServer.Put", &backupArgs, &backupReply)
 			if success && backupReply.Err == OK {
 				break
 			}
@@ -185,6 +194,14 @@ func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	DPrintf("Server %v: Get[%v] start\n", server.id, args.Key)
 
+	server.viewMu.RLock()
+	if !server.isPrimary {
+		DPrintf("Server %v: Reject request, backup doesn't serve clients\n", server.id)
+		reply.Err = ErrWrongServer
+		return nil
+	}
+	server.viewMu.RUnlock()
+
 	value, exists := server.kvStore.Get(args.Key)
 	reply.Value = value
 	reply.Err = OK
@@ -192,7 +209,7 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 		reply.Err = ErrNoKey
 	}
 
-	DPrintf("Server %v: Get[%v]=%v start\n", server.id, args.Key, reply.Value)
+	DPrintf("Server %v: Get[%v]=%v succeeded\n", server.id, args.Key, reply.Value)
 	return nil
 }
 
@@ -206,6 +223,11 @@ func (server *KVServer) tick() {
 
 	server.viewMu.Lock()
 	server.view = view
+	if !server.isPrimary && (server.id == server.view.Primary) {
+		DPrintf("Server %v is now primary\n", server.id)
+		server.isPrimary = true
+	}
+	server.backup = server.view.Backup
 	server.viewMu.Unlock()
 
 }
