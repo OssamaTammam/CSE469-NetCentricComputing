@@ -135,20 +135,38 @@ type KVServer struct {
 
 	// Server state
 	isPrimary bool
+	backup    string
 
 	// Concurrency control
 	viewMu sync.RWMutex
 }
 
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
-	DPrintf("Node %v: Put[%v]=%v start\n", server.id, args.Key, args.Value)
+	DPrintf("Server %v: Put[%v]=%v start\n", server.id, args.Key, args.Value)
 
 	// Check for dupes
 	if cachedReply, exists := server.reqCache.GetRequest(args.ClientId, args.RequestId); exists {
-		DPrintf("Node %v: Duplicate request serving from cache\n", server.id)
+		DPrintf("Server %v: Duplicate request Put[%v]=%v serve from cache\n", server.id, args.Key, args.Value)
 		*reply = cachedReply
 		return nil
 	}
+
+	// Forward request to backup server
+	server.viewMu.RLock()
+	if server.isPrimary && server.backup != "" {
+		backupArgs := *args
+		backupArgs.IsBackup = true
+		backupReply := PutReply{}
+		for range MAX_RETRIES {
+			DPrintf("Server %v: Forwarding Put[%v]=%v to backup server %v", server.id, args.Key, args.Value, server.backup)
+			success := call(server.backup, "KVStore.Put", &backupArgs, &backupReply)
+			if success && backupReply.Err == OK {
+				break
+			}
+			time.Sleep(sysmonitor.PingInterval)
+		}
+	}
+	server.viewMu.RUnlock()
 
 	if args.DoHash {
 		reply.PreviousValue = server.kvStore.PutHash(args.Key, args.Value)
@@ -160,12 +178,12 @@ func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 	// Cache request
 	server.reqCache.WriteRequest(args.ClientId, args.RequestId, reply)
 
-	DPrintf("Node %v: Put[%v]=%v succeeded\n", server.id, args.Key, args.Value)
+	DPrintf("Server %v: Put[%v]=%v succeeded\n", server.id, args.Key, args.Value)
 	return nil
 }
 
 func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
-	DPrintf("Node %v: Get[%v] start\n", server.id, args.Key)
+	DPrintf("Server %v: Get[%v] start\n", server.id, args.Key)
 
 	value, exists := server.kvStore.Get(args.Key)
 	reply.Value = value
@@ -174,7 +192,7 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 		reply.Err = ErrNoKey
 	}
 
-	DPrintf("Node %v: Get[%v]=%v start\n", server.id, args.Key, reply.Value)
+	DPrintf("Server %v: Get[%v]=%v start\n", server.id, args.Key, reply.Value)
 	return nil
 }
 
@@ -182,10 +200,10 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 func (server *KVServer) tick() {
 	view, err := server.monitorClnt.Ping(server.view.Viewnum)
 	if err != nil {
-		DPrintf("Node %v: Error pinging monitor server: %v\n", server.id, err)
+		DPrintf("Server %v: Error pinging monitor server: %v\n", server.id, err)
 		return
 	}
-	
+
 	server.viewMu.Lock()
 	server.view = view
 	server.viewMu.Unlock()

@@ -21,6 +21,7 @@ type PutArgs struct {
 	DoHash    bool // For PutHash
 	ClientId  string
 	RequestId int64
+	IsBackup  bool
 }
 
 type PutReply struct {
