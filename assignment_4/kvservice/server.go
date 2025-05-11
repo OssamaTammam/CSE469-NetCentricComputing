@@ -15,7 +15,7 @@ import (
 )
 
 // Debugging
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -170,11 +170,31 @@ func (server *KVServer) AcceptState(store *map[string]string, cache *map[uint32]
 	server.reqCache.cache = *cache
 }
 
+func (server *KVServer) InitiateSync(backupAddress string) {
+	server.syncMu.Lock()
+	store, cache := server.CopyState()
+	args := SyncArgs{
+		Store: *store,
+		Cache: *cache,
+	}
+	reply := SyncReply{}
+	for range MAX_RETRIES {
+		DPrintf("Server %v: Initiating state transfer to server %v\n", server.id, backupAddress)
+		success := call(backupAddress, "KVServer.SyncState", &args, &reply)
+		if success && reply.Err == OK {
+			DPrintf("Server %v: State transfer to server %v succeeded\n", server.id, backupAddress)
+			break
+		}
+		time.Sleep(sysmonitor.PingInterval)
+	}
+	server.syncMu.Unlock()
+}
+
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 	server.syncMu.RLock()
 	defer server.syncMu.RUnlock()
 
-	DPrintf("Server %v: Put[%v]=%v start\n", server.id, args.Key, args.Value)
+	DPrintf("Server %v: Put[%v]=%v start with id %v\n", server.id, args.Key, args.Value, server.reqCache.GetRequestId(args.ClientId, args.RequestId))
 
 	server.viewMu.RLock()
 
@@ -250,12 +270,13 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	}
 
 	// If not primary refuse
-	if !server.isPrimary {
+	if !server.isPrimary && !args.IsBackup {
 		DPrintf("Server %v: Reject request, backup doesn't serve clients\n", server.id)
 		reply.Err = ErrWrongServer
 		server.viewMu.RUnlock()
 		return nil
 	}
+
 	server.viewMu.RUnlock()
 
 	value, exists := server.kvStore.Get(args.Key)
@@ -264,6 +285,29 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	if !exists {
 		reply.Err = ErrNoKey
 	}
+
+	// Forward request to backup server
+	server.viewMu.RLock()
+	if server.isPrimary && server.view.Backup != "" {
+		backupArgs := *args
+		backupArgs.IsBackup = true
+		backupReply := GetReply{}
+		for range MAX_RETRIES {
+			DPrintf("Server %v: Forwarding Get[%v] to backup server %v\n", server.id, args.Key, server.view.Backup)
+			success := call(server.view.Backup, "KVServer.Get", &backupArgs, &backupReply)
+			if success && (backupReply.Err == OK || backupReply.Err == ErrNoKey) {
+				if reply.Value != backupReply.Value {
+					DPrintf("Server %v: Inconsistent state with backup server %v\n", server.id, server.view.Backup)
+					server.syncMu.RUnlock()
+					server.InitiateSync(server.view.Backup)
+					server.syncMu.RLock()
+				}
+				break
+			}
+			time.Sleep(sysmonitor.PingInterval)
+		}
+	}
+	server.viewMu.RUnlock()
 
 	DPrintf("Server %v: Get[%v]=%v succeeded\n", server.id, args.Key, reply.Value)
 	return nil
@@ -275,22 +319,12 @@ func (server *KVServer) SyncState(args *SyncArgs, reply *SyncReply) error {
 	server.syncMu.Lock()
 	defer server.syncMu.Unlock()
 
-	DPrintf("Server %v: Backup server %v start state transfer\n", server.id, args.BackupServerId)
+	DPrintf("Server %v: Start state transfer\n", server.id)
 
-	// make a copy of the server
-	store, cache := server.CopyState()
-	reply.Store = *store
-	reply.Cache = *cache
+	server.AcceptState(&args.Store, &args.Cache)
 	reply.Err = OK
 
-	// Update the view
-	server.viewMu.Lock()
-
-	view, _ := server.monitorClnt.Ping(server.view.Viewnum)
-	server.view = view
-	server.viewMu.Unlock()
-
-	DPrintf("Server %v: Backup server %v state sent successfully\n", server.id, args.BackupServerId)
+	DPrintf("Server %v: State transfer succeeded\n", server.id)
 	return nil
 }
 
@@ -312,34 +346,19 @@ func (server *KVServer) tick() {
 	server.viewMu.RLock()
 
 	// What warrants a state transfer
-	needSync := (server.id == server.view.Backup && (server.id != server.latestBackup || server.isIsolated))
+	needSync := server.view.Backup != "" && server.latestBackup != server.view.Backup
 
-	if needSync {
+	if server.id == server.view.Primary && needSync {
 		// Ask for state transfer
-		server.syncMu.Lock()
-		args := SyncArgs{
-			BackupServerId: server.id,
-		}
-		reply := SyncReply{}
-		for range MAX_RETRIES {
-			DPrintf("Server %v: Requesting state from server %v\n", server.view.Backup, server.view.Primary)
-			success := call(server.view.Primary, "KVServer.SyncState", &args, &reply)
-			if success && reply.Err == OK {
-				server.AcceptState(&reply.Store, &reply.Cache)
-				DPrintf("Server %v: State transferred successfully from server %v\n", server.view.Backup, server.view.Primary)
-				break
-			}
-			time.Sleep(sysmonitor.PingInterval)
-			DPrintf("Server %v: State transferred failed from server %v\n", server.view.Backup, server.view.Primary)
-		}
-		server.syncMu.Unlock()
+		server.InitiateSync(server.view.Backup)
 	}
+
 	server.viewMu.RUnlock()
 
 	server.viewMu.Lock()
 
 	if !server.isPrimary && (server.id == server.view.Primary) {
-		DPrintf("Server %v is now primary\n", server.id)
+		DPrintf("Server %v is now primary\nServer %v is now backup\n", server.id, server.view.Backup)
 		server.isPrimary = true
 	}
 	server.latestBackup = server.view.Backup

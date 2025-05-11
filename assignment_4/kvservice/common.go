@@ -33,6 +33,7 @@ type GetArgs struct {
 	Key       string
 	ClientId  string
 	RequestId int64
+	IsBackup  bool
 }
 
 type GetReply struct {
@@ -43,13 +44,12 @@ type GetReply struct {
 // Add your RPC definitions here.
 // ======================================
 type SyncArgs struct {
-	BackupServerId string
+	Store map[string]string
+	Cache map[uint32]PutReply
 }
 
 type SyncReply struct {
-	Err   Err
-	Store map[string]string
-	Cache map[uint32]PutReply
+	Err Err
 }
 
 // ======================================
