@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
 	"syscall"
 	"sysmonitor"
@@ -14,13 +15,108 @@ import (
 )
 
 // Debugging
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
 		n, err = fmt.Printf(format, a...)
 	}
 	return
+}
+
+// Concurrent KVStore struct
+type KVStore struct {
+	store map[string]string
+	mu    sync.RWMutex
+}
+
+// Init the store
+func NewKVStore() *KVStore {
+	return &KVStore{
+		store: make(map[string]string),
+	}
+}
+
+// Safely put
+func (kvStore *KVStore) Put(key string, value string) {
+	kvStore.mu.Lock()
+	defer kvStore.mu.Unlock()
+	kvStore.store[key] = value
+}
+
+// Put hash returns the prevValue
+func (kvStore *KVStore) PutHash(key string, value string) string {
+	// Get prev value
+	kvStore.mu.RLock()
+	prevValue, exists := kvStore.store[key]
+	kvStore.mu.RUnlock()
+
+	if !exists {
+		prevValue = ""
+	}
+
+	kvStore.mu.Lock()
+	kvStore.store[key] = strconv.Itoa(int(hash(prevValue + value)))
+	kvStore.mu.Unlock()
+
+	return prevValue
+}
+
+func (kvStore *KVStore) Get(key string) (string, bool) {
+	kvStore.mu.RLock()
+	defer kvStore.mu.RUnlock()
+
+	value, exists := kvStore.store[key]
+
+	return value, exists
+}
+
+func (kvStore *KVStore) Copy() *map[string]string {
+	kvStore.mu.RLock()
+	defer kvStore.mu.RUnlock()
+
+	// Make a copy
+	copy := make(map[string]string, len(kvStore.store))
+	for k, v := range kvStore.store {
+		copy[k] = v
+	}
+
+	return &copy
+}
+
+type ReqCache struct {
+	cache map[uint32]PutReply
+	mu    sync.RWMutex
+}
+
+func NewReqCache() *ReqCache {
+	return &ReqCache{
+		cache: make(map[uint32]PutReply),
+	}
+}
+
+func (reqCache *ReqCache) GetRequestId(clientId string, requestId int64) uint32 {
+	return hash(clientId + strconv.FormatInt(requestId, 10))
+}
+
+func (reqCache *ReqCache) GetRequest(clientId string, requestId int64) (PutReply, bool) {
+	// Get hashId
+	hashedId := reqCache.GetRequestId(clientId, requestId)
+
+	// Check if it exists
+	reqCache.mu.RLock()
+	defer reqCache.mu.RUnlock()
+	reply, exists := reqCache.cache[hashedId]
+
+	return reply, exists
+}
+
+func (reqCache *ReqCache) WriteRequest(clientId string, requestId int64, reply PutReply) {
+	hashedId := reqCache.GetRequestId(clientId, requestId)
+
+	reqCache.mu.Lock()
+	reqCache.cache[hashedId] = reply
+	reqCache.mu.Unlock()
 }
 
 type KVServer struct {
@@ -34,6 +130,8 @@ type KVServer struct {
 	finish      chan interface{}
 
 	// Add your declarations here.
+	kvStore  KVStore
+	reqCache ReqCache
 }
 
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
@@ -72,7 +170,8 @@ func StartKVServer(monitorServer string, id string) *KVServer {
 
 	// Add your server initializations here
 	// ==================================
-
+	server.kvStore = *NewKVStore()
+	server.reqCache = *NewReqCache()
 	//====================================
 
 	rpcs := rpc.NewServer()
