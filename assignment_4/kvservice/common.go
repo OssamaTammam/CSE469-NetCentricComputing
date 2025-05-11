@@ -10,7 +10,7 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongServer = "ErrWrongServer"
-	MAX_RETRIES    = 5
+	MAX_RETRIES    = 1
 )
 
 type Err string
@@ -41,7 +41,16 @@ type GetReply struct {
 }
 
 // Add your RPC definitions here.
-//======================================
+// ======================================
+type SyncArgs struct {
+	BackupServerId string
+}
+
+type SyncReply struct {
+	Err   Err
+	Store map[string]string
+	Cache map[uint32]PutReply
+}
 
 // ======================================
 

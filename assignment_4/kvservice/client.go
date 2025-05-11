@@ -130,6 +130,8 @@ func (client *KVClient) PutAux(key string, value string, dohash bool) string {
 
 	client.nextRequestId++
 
+	DPrintf("Client %v: Put[%v]=%v request to server %v succeeded\n", client.id, args.Key, args.Value, client.view.Primary)
+
 	if dohash {
 		return reply.PreviousValue
 	}

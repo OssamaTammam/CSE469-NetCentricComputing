@@ -119,6 +119,19 @@ func (reqCache *ReqCache) WriteRequest(clientId string, requestId int64, reply *
 	reqCache.mu.Unlock()
 }
 
+func (reqCache *ReqCache) Copy() *map[uint32]PutReply {
+	reqCache.mu.RLock()
+	defer reqCache.mu.RUnlock()
+
+	// Make a copy
+	copy := make(map[uint32]PutReply, len(reqCache.cache))
+	for k, v := range reqCache.cache {
+		copy[k] = v
+	}
+
+	return &copy
+}
+
 type KVServer struct {
 	l           net.Listener
 	dead        bool // for testing
@@ -134,21 +147,50 @@ type KVServer struct {
 	reqCache ReqCache
 
 	// Server state
-	isPrimary bool
-	backup    string
+	isPrimary    bool
+	isIsolated   bool // For network failures (can't contact sysmonitor)
+	latestBackup string
 
 	// Concurrency control
 	viewMu sync.RWMutex
+	syncMu sync.RWMutex
+}
+
+func (server *KVServer) CopyState() (*map[string]string, *map[uint32]PutReply) {
+	return server.kvStore.Copy(), server.reqCache.Copy()
+}
+
+func (server *KVServer) AcceptState(store *map[string]string, cache *map[uint32]PutReply) {
+	server.kvStore.mu.Lock()
+	server.reqCache.mu.Lock()
+	defer server.kvStore.mu.Unlock()
+	defer server.reqCache.mu.Unlock()
+
+	server.kvStore.store = *store
+	server.reqCache.cache = *cache
 }
 
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
+	server.syncMu.RLock()
+	defer server.syncMu.RUnlock()
+
 	DPrintf("Server %v: Put[%v]=%v start\n", server.id, args.Key, args.Value)
 
-	// If not primary refuse
 	server.viewMu.RLock()
+
+	// If server is isolated don't serve
+	if server.isIsolated {
+		DPrintf("Server %v: Reject request, can't contact sysmonitor\n", server.id)
+		reply.Err = ErrWrongServer
+		server.viewMu.RUnlock()
+		return nil
+	}
+
+	// If not primary refuse
 	if !server.isPrimary && !args.IsBackup {
 		DPrintf("Server %v: Reject request, backup doesn't serve clients\n", server.id)
 		reply.Err = ErrWrongServer
+		server.viewMu.RUnlock()
 		return nil
 	}
 	server.viewMu.RUnlock()
@@ -162,13 +204,14 @@ func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 
 	// Forward request to backup server
 	server.viewMu.RLock()
-	if server.isPrimary && server.backup != "" {
+
+	if server.isPrimary && server.view.Backup != "" {
 		backupArgs := *args
 		backupArgs.IsBackup = true
 		backupReply := PutReply{}
 		for range MAX_RETRIES {
-			DPrintf("Server %v: Forwarding Put[%v]=%v to backup server %v", server.id, args.Key, args.Value, server.backup)
-			success := call(server.backup, "KVServer.Put", &backupArgs, &backupReply)
+			DPrintf("Server %v: Forwarding Put[%v]=%v to backup server %v\n", server.id, args.Key, args.Value, server.view.Backup)
+			success := call(server.view.Backup, "KVServer.Put", &backupArgs, &backupReply)
 			if success && backupReply.Err == OK {
 				break
 			}
@@ -192,12 +235,25 @@ func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 }
 
 func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
+	server.syncMu.RLock()
+	defer server.syncMu.RUnlock()
+
 	DPrintf("Server %v: Get[%v] start\n", server.id, args.Key)
 
 	server.viewMu.RLock()
+	// If server is isolated don't serve
+	if server.isIsolated {
+		DPrintf("Server %v: Reject request, can't contact sysmonitor\n", server.id)
+		reply.Err = ErrWrongServer
+		server.viewMu.RUnlock()
+		return nil
+	}
+
+	// If not primary refuse
 	if !server.isPrimary {
 		DPrintf("Server %v: Reject request, backup doesn't serve clients\n", server.id)
 		reply.Err = ErrWrongServer
+		server.viewMu.RUnlock()
 		return nil
 	}
 	server.viewMu.RUnlock()
@@ -213,23 +269,82 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	return nil
 }
 
+// This RPC is sent to the primary to request its current state
+func (server *KVServer) SyncState(args *SyncArgs, reply *SyncReply) error {
+	// Wait for all current requests to finish
+	server.syncMu.Lock()
+	defer server.syncMu.Unlock()
+
+	DPrintf("Server %v: Backup server %v start state transfer\n", server.id, args.BackupServerId)
+
+	// make a copy of the server
+	store, cache := server.CopyState()
+	reply.Store = *store
+	reply.Cache = *cache
+	reply.Err = OK
+
+	// Update the view
+	server.viewMu.Lock()
+
+	view, _ := server.monitorClnt.Ping(server.view.Viewnum)
+	server.view = view
+	server.viewMu.Unlock()
+
+	DPrintf("Server %v: Backup server %v state sent successfully\n", server.id, args.BackupServerId)
+	return nil
+}
+
 // ping the view server periodically.
 func (server *KVServer) tick() {
 	view, err := server.monitorClnt.Ping(server.view.Viewnum)
-	if err != nil {
-		DPrintf("Server %v: Error pinging monitor server: %v\n", server.id, err)
-		return
-	}
 
 	server.viewMu.Lock()
+
+	if err != nil {
+		DPrintf("Server %v: Error pinging monitor server: %v\n", server.id, err)
+		server.isIsolated = true
+		server.viewMu.Unlock()
+		return
+	}
 	server.view = view
+	server.viewMu.Unlock()
+
+	server.viewMu.RLock()
+
+	// What warrants a state transfer
+	needSync := (server.id == server.view.Backup && (server.id != server.latestBackup || server.isIsolated))
+
+	if needSync {
+		// Ask for state transfer
+		server.syncMu.Lock()
+		args := SyncArgs{
+			BackupServerId: server.id,
+		}
+		reply := SyncReply{}
+		for range MAX_RETRIES {
+			DPrintf("Server %v: Requesting state from server %v\n", server.view.Backup, server.view.Primary)
+			success := call(server.view.Primary, "KVServer.SyncState", &args, &reply)
+			if success && reply.Err == OK {
+				server.AcceptState(&reply.Store, &reply.Cache)
+				DPrintf("Server %v: State transferred successfully from server %v\n", server.view.Backup, server.view.Primary)
+				break
+			}
+			time.Sleep(sysmonitor.PingInterval)
+			DPrintf("Server %v: State transferred failed from server %v\n", server.view.Backup, server.view.Primary)
+		}
+		server.syncMu.Unlock()
+	}
+	server.viewMu.RUnlock()
+
+	server.viewMu.Lock()
+
 	if !server.isPrimary && (server.id == server.view.Primary) {
 		DPrintf("Server %v is now primary\n", server.id)
 		server.isPrimary = true
 	}
-	server.backup = server.view.Backup
+	server.latestBackup = server.view.Backup
+	server.isIsolated = false
 	server.viewMu.Unlock()
-
 }
 
 // tell the server to shut itself down.
