@@ -132,6 +132,12 @@ type KVServer struct {
 	// Add your declarations here.
 	kvStore  KVStore
 	reqCache ReqCache
+
+	// Server state
+	isPrimary bool
+
+	// Concurrency control
+	viewMu sync.RWMutex
 }
 
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
@@ -162,11 +168,10 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 
 // ping the view server periodically.
 func (server *KVServer) tick() {
-
-	// This line will give an error initially as view and err are not used.
-	view, err := server.monitorClnt.Ping(server.view.Viewnum)
-
-	// Your code here.
+	view, _ := server.monitorClnt.Ping(server.view.Viewnum)
+	server.viewMu.Lock()
+	server.view = view
+	server.viewMu.Unlock()
 
 }
 
