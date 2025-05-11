@@ -136,11 +136,27 @@ type KVServer struct {
 
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 	// Your code here.
+
+	if args.DoHash {
+		reply.PreviousValue = server.kvStore.PutHash(args.Key, args.Value)
+	} else {
+		server.kvStore.Put(args.Key, args.Value)
+	}
+	reply.Err = OK
+
 	return nil
 }
 
 func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	// Your code here.
+
+	value, exists := server.kvStore.Get(args.Key)
+	reply.Value = value
+	reply.Err = OK
+	if !exists {
+		reply.Err = ErrNoKey
+	}
+
 	return nil
 }
 
