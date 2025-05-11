@@ -10,17 +10,17 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongServer = "ErrWrongServer"
+	MAX_RETRIES    = 5
 )
 
 type Err string
 
 type PutArgs struct {
-	Key    string
-	Value  string
-	DoHash bool // For PutHash
-	// Add your definitions here.
-
-	// Field names should start with capital letters for RPC to work.
+	Key       string
+	Value     string
+	DoHash    bool // For PutHash
+	ClientId  string
+	RequestId int64
 }
 
 type PutReply struct {
@@ -29,8 +29,9 @@ type PutReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	// Add your definitions here.
+	Key       string
+	ClientId  string
+	RequestId int64
 }
 
 type GetReply struct {

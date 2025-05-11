@@ -111,11 +111,11 @@ func (reqCache *ReqCache) GetRequest(clientId string, requestId int64) (PutReply
 	return reply, exists
 }
 
-func (reqCache *ReqCache) WriteRequest(clientId string, requestId int64, reply PutReply) {
+func (reqCache *ReqCache) WriteRequest(clientId string, requestId int64, reply *PutReply) {
 	hashedId := reqCache.GetRequestId(clientId, requestId)
 
 	reqCache.mu.Lock()
-	reqCache.cache[hashedId] = reply
+	reqCache.cache[hashedId] = *reply
 	reqCache.mu.Unlock()
 }
 
@@ -141,7 +141,14 @@ type KVServer struct {
 }
 
 func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
-	// Your code here.
+	DPrintf("Node %v: Put[%v]=%v start\n", server.id, args.Key, args.Value)
+
+	// Check for dupes
+	if cachedReply, exists := server.reqCache.GetRequest(args.ClientId, args.RequestId); exists {
+		DPrintf("Node %v: Duplicate request serving from cache\n", server.id)
+		*reply = cachedReply
+		return nil
+	}
 
 	if args.DoHash {
 		reply.PreviousValue = server.kvStore.PutHash(args.Key, args.Value)
@@ -150,11 +157,15 @@ func (server *KVServer) Put(args *PutArgs, reply *PutReply) error {
 	}
 	reply.Err = OK
 
+	// Cache request
+	server.reqCache.WriteRequest(args.ClientId, args.RequestId, reply)
+
+	DPrintf("Node %v: Put[%v]=%v succeeded\n", server.id, args.Key, args.Value)
 	return nil
 }
 
 func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
-	// Your code here.
+	DPrintf("Node %v: Get[%v] start\n", server.id, args.Key)
 
 	value, exists := server.kvStore.Get(args.Key)
 	reply.Value = value
@@ -163,12 +174,18 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 		reply.Err = ErrNoKey
 	}
 
+	DPrintf("Node %v: Get[%v]=%v start\n", server.id, args.Key, reply.Value)
 	return nil
 }
 
 // ping the view server periodically.
 func (server *KVServer) tick() {
-	view, _ := server.monitorClnt.Ping(server.view.Viewnum)
+	view, err := server.monitorClnt.Ping(server.view.Viewnum)
+	if err != nil {
+		DPrintf("Node %v: Error pinging monitor server: %v\n", server.id, err)
+		return
+	}
+	
 	server.viewMu.Lock()
 	server.view = view
 	server.viewMu.Unlock()

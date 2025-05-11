@@ -3,7 +3,9 @@ package kvservice
 import (
 	"fmt"
 	"net/rpc"
+	"strconv"
 	"sysmonitor"
+	"time"
 )
 
 // import "time"
@@ -15,8 +17,9 @@ type KVClient struct {
 
 	// view provides information about which is primary, and which is backup.
 	// Use updateView() to update this view when doing get and put as needed.
-	view sysmonitor.View
-	id   string // should be generated to be a random string
+	view          sysmonitor.View
+	id            string // should be generated to be a random string
+	nextRequestId int64
 }
 
 func MakeKVClient(monitorServer string) *KVClient {
@@ -26,7 +29,7 @@ func MakeKVClient(monitorServer string) *KVClient {
 
 	// ToDo: Generate a random id for the client.
 	// ==================================
-
+	client.id = strconv.FormatInt(nrand(), 10)
 	//====================================
 
 	return client
@@ -74,18 +77,64 @@ func (client *KVClient) updateView() {
 // If the key was never set, "" is expected.
 // This must keep trying until it gets a response.
 func (client *KVClient) Get(key string) string {
+	args := GetArgs{
+		Key:       key,
+		ClientId:  client.id,
+		RequestId: client.nextRequestId,
+	}
+	reply := GetReply{}
 
-	// Your code here.
-	return "??"
+	for {
+		client.updateView()
+
+		DPrintf("Client %v: Sending Get[%v] to server %v\n", client.id, args.Key, client.view.Primary)
+		success := call(client.view.Primary, "KVServer.Get", &args, &reply)
+		if success && (reply.Err == OK || reply.Err == ErrNoKey) {
+			break
+		}
+
+		DPrintf("Client %v: Request Get[%v] failed retrying in %v", client.id, args.Key, sysmonitor.PingInterval)
+		time.Sleep(sysmonitor.PingInterval)
+	}
+
+	client.nextRequestId++
+	DPrintf("Client %v: Get[%v] request to server %v succeeded returned %v\n", client.id, args.Key, client.view.Primary, reply.Value)
+	return reply.Value
 }
 
 // This should tell the primary to update key's value through an RPC call.
 // must keep trying until it succeeds.
 // You can get the primary from the client's current view.
 func (client *KVClient) PutAux(key string, value string, dohash bool) string {
+	args := PutArgs{
+		Key:       key,
+		Value:     value,
+		DoHash:    dohash,
+		ClientId:  client.id,
+		RequestId: client.nextRequestId,
+	}
+	reply := PutReply{}
 
-	// Your code here.
-	return "??"
+	for {
+		client.updateView()
+
+		DPrintf("Client %v: Sending Put[%v]=%v to server %v\n", client.id, args.Key, args.Value, client.view.Primary)
+		success := call(client.view.Primary, "KVServer.Put", &args, &reply)
+		if success && reply.Err == OK {
+			break
+		}
+
+		DPrintf("Client %v: Request Put[%v]=%v failed retrying in %v", client.id, args.Key, args.Value, sysmonitor.PingInterval)
+		time.Sleep(sysmonitor.PingInterval)
+	}
+
+	client.nextRequestId++
+
+	if dohash {
+		return reply.PreviousValue
+	}
+
+	return string(reply.Err)
 }
 
 // Both put and puthash rely on the auxiliary method PutAux. No modifications needed below.
