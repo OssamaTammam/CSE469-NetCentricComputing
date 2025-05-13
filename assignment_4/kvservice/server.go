@@ -60,6 +60,7 @@ func (kvStore *KVStore) PutHash(key string, value string) string {
 	return prevValue
 }
 
+// Safely get
 func (kvStore *KVStore) Get(key string) (string, bool) {
 	kvStore.mu.RLock()
 	defer kvStore.mu.RUnlock()
@@ -69,6 +70,7 @@ func (kvStore *KVStore) Get(key string) (string, bool) {
 	return value, exists
 }
 
+// copies the whole store for sync
 func (kvStore *KVStore) Copy() *map[string]string {
 	kvStore.mu.RLock()
 	defer kvStore.mu.RUnlock()
@@ -311,7 +313,7 @@ func (server *KVServer) Get(args *GetArgs, reply *GetReply) error {
 	return nil
 }
 
-// This RPC is sent to the primary to request its current state
+// This RPC is sent to the the backups to sync when they are outdated
 func (server *KVServer) SyncState(args *SyncArgs, reply *SyncReply) error {
 	// Wait for all current requests to finish
 	server.syncMu.Lock()
@@ -332,6 +334,7 @@ func (server *KVServer) tick() {
 
 	server.viewMu.Lock()
 
+	// Can't contact monitor then shouldn't server reqs
 	if err != nil {
 		DPrintf("Server %v: Error pinging monitor server: %v\n", server.id, err)
 		server.isIsolated = true
